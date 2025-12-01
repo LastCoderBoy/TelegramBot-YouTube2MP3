@@ -1,0 +1,31 @@
+server:
+  port: 8080
+
+specialUsername: ${SPECIAL_USERNAME}
+
+spring:
+  application:
+    name: telegram-youtube-bot
+
+# Telegram Bot Configuration
+telegram:
+  bot:
+    username: ${TELEGRAM_BOT_USERNAME}
+    token: ${TELEGRAM_BOT_TOKEN}
+  max-file-size: 52428800
+
+# File Storage Configuration
+file:
+  storage:
+    base-path: ${java.io.tmpdir}/telegram-bot
+    download-path: ${file.storage.base-path}/downloads
+    converted-path: ${file.storage.base-path}/converted
+    cleanup-delay-minutes: 30
+
+# Logging
+logging:
+  level:
+    root: INFO
+    com.lastcoderboy.telegramyoutubebot: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
