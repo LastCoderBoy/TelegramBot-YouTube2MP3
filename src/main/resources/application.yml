@@ -22,6 +22,18 @@ file:
     converted-path: ${file.storage.base-path}/converted
     cleanup-delay-minutes: 30
 
+
+# YouTube Download Configuration
+youtube:
+  download:
+    yt-dlp-path: yt-dlp  # Will use system PATH
+
+# FFmpeg Configuration
+ffmpeg:
+  path: ffmpeg  # Will use system PATH. For Windows: C:/path/to/ffmpeg. exe
+  audio-bitrate: 192k
+  audio-codec: libmp3lame
+
 # Logging
 logging:
   level:
