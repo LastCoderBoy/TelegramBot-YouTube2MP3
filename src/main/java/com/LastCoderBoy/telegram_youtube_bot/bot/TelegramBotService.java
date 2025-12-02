@@ -2,15 +2,22 @@ package com.LastCoderBoy.telegram_youtube_bot.bot;
 
 
 import com.LastCoderBoy.telegram_youtube_bot.config.BotProperties;
+import com.LastCoderBoy.telegram_youtube_bot.model.ConversionStatus;
+import com.LastCoderBoy.telegram_youtube_bot.model.ConversionTask;
+import com.LastCoderBoy.telegram_youtube_bot.model.VideoMetadata;
+import com.LastCoderBoy.telegram_youtube_bot.service.ConversionOrchestrationService;
 import com.LastCoderBoy.telegram_youtube_bot.util.YouTubeUrlValidator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
+import org.telegram.telegrambots.meta.api.methods.send.SendAudio;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
+import java.io.File;
 import java.util.Objects;
 
 @Slf4j
@@ -22,11 +29,15 @@ public class TelegramBotService extends TelegramLongPollingBot {
 
     private final BotProperties botProperties;
     private final YouTubeUrlValidator urlValidator;
+    private final ConversionOrchestrationService orchestrationService;
 
-    public TelegramBotService(BotProperties botProperties, YouTubeUrlValidator urlValidator) {
+
+    public TelegramBotService(BotProperties botProperties, YouTubeUrlValidator urlValidator, ConversionOrchestrationService orchestrationService) {
         super(botProperties.getToken());
         this.botProperties = botProperties;
         this.urlValidator = urlValidator;
+        this.orchestrationService = orchestrationService;
+        log.info("TelegramBotService initialized with username: {}", botProperties.getUsername());
     }
 
     @Override
@@ -82,7 +93,7 @@ public class TelegramBotService extends TelegramLongPollingBot {
             case "/about" -> sendMessage(chatId,
                     "ℹ️ About this bot:\n\n" +
                             "YouTube to MP3 Converter Bot\n" +
-                            "Version: 1.0. 0\n\n" +
+                            "Version: 1.0.0\n\n" +
                             "Built with ❤️ using:\n" +
                             "• Java & Spring Boot\n" +
                             "• yt-dlp\n" +
@@ -95,14 +106,80 @@ public class TelegramBotService extends TelegramLongPollingBot {
 
     private void handleYouTubeUrl(Long chatId, String url) {
         log.info("Processing YouTube URL: {}", url);
-        String videoId = urlValidator.extractVideoId(url);
 
-        sendMessage(chatId,
-                "✅ Valid YouTube URL detected!\n\n" +
-                        "🎬 Video ID: " + videoId + "\n\n" +
-                        "⏳ Processing... (This feature is coming soon!)");
+        try {
+            // Step 1: Fetch video metadata
+            sendMessage(chatId, "🔍 Fetching video information...");
+            VideoMetadata metadata = orchestrationService.getVideoInfo(url);
 
-        // TODO: We'll implement the actual conversion logic next
+            // Step 2: Show video info
+            String videoInfo = String.format(
+                    "✅ Video found!\n\n" +
+                            "🎬 Title: %s\n" +
+                            "👤 Channel: %s\n" +
+                            "⏱ Duration: %s\n\n" +
+                            "⏳ Starting conversion...",
+                    metadata.getTitle(),
+                    metadata.getUploader(),
+                    formatDuration(metadata.getDuration())
+            );
+            sendMessage(chatId, videoInfo);
+
+            // Step 3: Start async processing
+            orchestrationService.processVideo(url, chatId)
+                    .thenAccept(task -> handleConversionResult(chatId, task))
+                    .exceptionally(ex -> {
+                        log.error("Error processing video", ex);
+                        sendMessage(chatId, "❌ An error occurred: " + ex.getMessage());
+                        return null;
+                    });
+
+        } catch (Exception e) {
+            log.error("Failed to process YouTube URL: {}", url, e);
+            sendMessage(chatId, "❌ Failed to fetch video information.  Please check the URL and try again.");
+        }
+    }
+
+
+    private void handleConversionResult(Long chatId, ConversionTask task) {
+        if (task.getStatus() == ConversionStatus.COMPLETED) {
+            log.info("[{}] Conversion successful, uploading file", task.getTaskId());
+
+            sendMessage(chatId, "✅ Conversion completed!  Uploading.. .");
+
+            // Upload the MP3 file
+            File mp3File = new File(task.getConvertedFilePath());
+            sendAudioFile(chatId, mp3File, task.getMetadata());
+
+            // Cleanup
+            orchestrationService.cleanupTask(task);
+
+        } else if (task.getStatus() == ConversionStatus. FAILED) {
+            log.error("[{}] Conversion failed: {}", task.getTaskId(), task.getErrorMessage());
+            sendMessage(chatId, "❌ Conversion failed!\n\n" +
+                    "Unable to process the request for the URL: " + task.getYoutubeUrl());
+        }
+    }
+
+    private void sendAudioFile(Long chatId, File audioFile, VideoMetadata metadata) {
+        try {
+            SendAudio sendAudio = SendAudio.builder()
+                    .chatId(chatId. toString())
+                    .audio(new InputFile(audioFile))
+                    .title(metadata.getTitle())
+                    .performer(metadata.getUploader())
+                    .caption("🎵 " + metadata.getTitle())
+                    .build();
+
+            execute(sendAudio);
+            log.info("Audio file sent successfully to chatId: {}", chatId);
+
+            sendMessage(chatId, "✅ Done! Enjoy your music!  🎵");
+
+        } catch (TelegramApiException e) {
+            log. error("Failed to send audio file to chatId: {}", chatId, e);
+            sendMessage(chatId, "❌ Failed to upload the audio file. It might be too large.");
+        }
     }
 
     public void sendMessage(Long chatId, String text) {
@@ -116,6 +193,21 @@ public class TelegramBotService extends TelegramLongPollingBot {
             log.debug("Message sent to {}: {}", chatId, text);
         } catch (TelegramApiException e) {
             log.error("Failed to send message to {}: {}", chatId, e. getMessage());
+        }
+    }
+
+    private String formatDuration(Long seconds) {
+        if (seconds == null || seconds == 0) {
+            return "Unknown";
+        }
+        long hours = seconds / 3600;
+        long minutes = (seconds % 3600) / 60;
+        long secs = seconds % 60;
+
+        if (hours > 0) {
+            return String.format("%d:%02d:%02d", hours, minutes, secs);
+        } else {
+            return String.format("%d:%02d", minutes, secs);
         }
     }
 }

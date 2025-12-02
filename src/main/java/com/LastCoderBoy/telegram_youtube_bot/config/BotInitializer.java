@@ -15,6 +15,7 @@ import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 public class BotInitializer {
 
     private final TelegramBotService bot;
+    private boolean botRegistered = false;
 
     public BotInitializer(TelegramBotService bot) {
         this.bot = bot;
@@ -22,10 +23,16 @@ public class BotInitializer {
 
     @EventListener({ContextRefreshedEvent.class})
     public void init() throws TelegramApiException {
+        if (botRegistered) {
+            log.info("Bot already registered, skipping initialization");
+            return;
+        }
+
         log.info("Initializing Telegram Bot...");
         TelegramBotsApi telegramBotsApi = new TelegramBotsApi(DefaultBotSession.class);
         try {
             telegramBotsApi.registerBot(bot);
+            botRegistered = true;
             log.info("Telegram Bot registered successfully: @{}", bot.getBotUsername());
         } catch (TelegramApiException e) {
             log.error("Failed to register bot: {}", e.getMessage());

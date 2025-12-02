@@ -2,8 +2,8 @@ package com.LastCoderBoy.telegram_youtube_bot.service.youtube;
 
 import com.LastCoderBoy.telegram_youtube_bot.exception.DownloadException;
 import com.LastCoderBoy.telegram_youtube_bot.model.VideoMetadata;
+import com.LastCoderBoy.telegram_youtube_bot.service.storage.FileStorageService;
 import com.LastCoderBoy.telegram_youtube_bot.util.CommandExecutor;
-import com.LastCoderBoy.telegram_youtube_bot.util.FileValidator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -25,9 +25,11 @@ public class YtDlpServiceImpl implements YouTubeDownloadService {
 
     private final CommandExecutor commandExecutor;
     private final ObjectMapper objectMapper;
+    private final FileStorageService fileStorageService;
 
-    public YtDlpServiceImpl(CommandExecutor commandExecutor) {
+    public YtDlpServiceImpl(CommandExecutor commandExecutor, FileStorageService fileStorageService) {
         this.commandExecutor = commandExecutor;
+        this.fileStorageService = fileStorageService;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -47,6 +49,7 @@ public class YtDlpServiceImpl implements YouTubeDownloadService {
             command.add("-o");
             command.add(outputPath.toString());
             command.add("--no-playlist");  // Don't download playlists
+            command.add("--quiet");  // Suppress warnings
             command.add("--no-warnings");
             command.add(url);
 
@@ -70,7 +73,7 @@ public class YtDlpServiceImpl implements YouTubeDownloadService {
 
             log.info("Audio downloaded successfully: {} ({})",
                     actualFile.getFileName(),
-                    FileValidator.getFileSizeReadable(Files.size(actualFile)));
+                    fileStorageService.getFileSizeReadable(Files.size(actualFile)));
 
             return actualFile;
 
@@ -89,6 +92,8 @@ public class YtDlpServiceImpl implements YouTubeDownloadService {
             command.add(ytDlpPath);
             command.add("--dump-json");
             command.add("--no-playlist");
+            command.add("--no-warnings");  // Suppress warnings
+            command.add("--quiet");  // Quiet mode
             command.add(url);
 
             CommandExecutor.ProcessResult result = commandExecutor.execute(
@@ -99,11 +104,18 @@ public class YtDlpServiceImpl implements YouTubeDownloadService {
                 throw new DownloadException("Failed to fetch metadata. Exit code: " + result.exitCode());
             }
 
+            // Extract JSON from output (filter out any non-JSON lines)
+            String jsonOutput = extractJsonFromOutput(result.output());
+
+            if (jsonOutput == null || jsonOutput.trim().isEmpty()) {
+                throw new DownloadException("No JSON output received from yt-dlp");
+            }
+
             JsonNode jsonNode = objectMapper.readTree(result.output());
 
             VideoMetadata metadata = VideoMetadata.builder()
                     .videoId(jsonNode.has("id") ? jsonNode.get("id").asText() : null)
-                    .title(jsonNode.has("title") ? jsonNode. get("title").asText() : "Unknown")
+                    .title(jsonNode.has("title") ? jsonNode.get("title").asText() : "Unknown")
                     .duration(jsonNode.has("duration") ? jsonNode.get("duration").asLong() : 0L)
                     .uploader(jsonNode.has("uploader") ? jsonNode.get("uploader").asText() : "Unknown")
                     .thumbnail(jsonNode.has("thumbnail") ? jsonNode.get("thumbnail").asText() : null)
@@ -117,6 +129,53 @@ public class YtDlpServiceImpl implements YouTubeDownloadService {
             log.error("Failed to fetch metadata for: {}", url, e);
             throw new DownloadException("Failed to fetch video metadata: " + e.getMessage(), e);
         }
+    }
+
+
+    /**
+     * Extract valid JSON from output (remove warnings and other non-JSON lines)
+     */
+    private String extractJsonFromOutput(String output) {
+        if (output == null || output.trim().isEmpty()) {
+            return null;
+        }
+
+        // Split by lines and find the first line that starts with '{'
+        String[] lines = output.split("\n");
+        StringBuilder jsonBuilder = new StringBuilder();
+        boolean jsonStarted = false;
+        int braceCount = 0;
+
+        for (String line : lines) {
+            String trimmedLine = line.trim();
+
+            // Skip empty lines
+            if (trimmedLine.isEmpty()) {
+                continue;
+            }
+
+            // Start capturing when we see opening brace
+            if (!jsonStarted && trimmedLine.startsWith("{")) {
+                jsonStarted = true;
+            }
+
+            if (jsonStarted) {
+                jsonBuilder.append(line).append("\n");
+
+                // Count braces to know when JSON ends
+                for (char c : line.toCharArray()) {
+                    if (c == '{') braceCount++;
+                    if (c == '}') braceCount--;
+                }
+
+                // If braces are balanced, JSON is complete
+                if (braceCount == 0) {
+                    break;
+                }
+            }
+        }
+
+        return jsonBuilder.toString().trim();
     }
 
     private Path findDownloadedFile(Path basePath) {

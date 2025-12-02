@@ -2,8 +2,9 @@ package com.LastCoderBoy.telegram_youtube_bot.service.audio;
 
 
 import com.LastCoderBoy.telegram_youtube_bot.exception.ConversionException;
+import com.LastCoderBoy.telegram_youtube_bot.service.storage.FileStorageService;
 import com.LastCoderBoy.telegram_youtube_bot.util.CommandExecutor;
-import com.LastCoderBoy.telegram_youtube_bot.util.FileValidator;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -16,6 +17,7 @@ import java.util.List;
 
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class FFmpegServiceImpl implements AudioConversionService {
 
     @Value("${ffmpeg.path}")
@@ -28,10 +30,7 @@ public class FFmpegServiceImpl implements AudioConversionService {
     private String audioCodec;
 
     private final CommandExecutor commandExecutor;
-
-    public FFmpegServiceImpl(CommandExecutor commandExecutor) {
-        this.commandExecutor = commandExecutor;
-    }
+    private final FileStorageService fileStorageService;
 
     @Override
     public Path convertToMp3(Path inputPath, Path outputPath) {
@@ -80,7 +79,7 @@ public class FFmpegServiceImpl implements AudioConversionService {
             long outputSize = Files.size(outputPath);
             log.info("Conversion completed: {} ({})",
                     outputPath.getFileName(),
-                    FileValidator.getFileSizeReadable(outputSize));
+                    fileStorageService.getFileSizeReadable(outputSize));
 
             return outputPath;
 
